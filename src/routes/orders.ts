@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { OrderExecutionService } from '../services/order-execution-service.js';
 import { QueueService } from '../services/queue-service.js';
 import { OrderExecutionRequest } from '../types/index.js';
+import { WebSocketManager } from '../services/websocket-manager.js';
 
 const OrderExecutionSchema = z.object({
   type: z.enum(['market', 'limit', 'sniper']),
@@ -16,14 +17,18 @@ const OrderExecutionSchema = z.object({
 
 export async function orderRoutes(
   fastify: FastifyInstance,
-  { orderExecutionService, queueService }: { orderExecutionService: OrderExecutionService, queueService: QueueService }
+  { orderExecutionService, queueService, wsManager }: { 
+    orderExecutionService: OrderExecutionService, 
+    queueService: QueueService,
+    wsManager: WebSocketManager
+  }
 ) {
+
   fastify.post('/execute', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const body = OrderExecutionSchema.parse(request.body) as OrderExecutionRequest;
       
       const order = await orderExecutionService.createOrder(body);
-      
       await queueService.addOrder(order.id);
       
       return {
@@ -31,7 +36,17 @@ export async function orderRoutes(
         orderId: order.id,
         status: order.status,
         message: 'Order created successfully. Connect to WebSocket for live updates.',
-        websocketUrl: `/api/orders/${order.id}/ws`
+        websocketUrl: `/api/orders/stream?orderId=${order.id}`,
+        upgradeInstructions: {
+          method: 'WebSocket upgrade',
+          url: `ws://localhost:3000/api/orders/stream?orderId=${order.id}`,
+          headers: {
+            'Upgrade': 'websocket',
+            'Connection': 'Upgrade',
+            'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+            'Sec-WebSocket-Version': '13'
+          }
+        }
       };
       
     } catch (error) {
@@ -51,8 +66,20 @@ export async function orderRoutes(
     }
   });
 
-  fastify.get('/:orderId/ws', { websocket: true }, async (connection, request) => {
-    const { orderId } = request.params as { orderId: string };
+  fastify.get('/stream', { websocket: true }, async (connection, request: FastifyRequest) => {
+    const { orderId } = request.query as { orderId: string };
+    
+    if (!orderId) {
+      connection.socket.send(JSON.stringify({
+        success: false,
+        error: 'Order ID required in query parameter',
+        example: 'ws://localhost:3000/api/orders/stream?orderId=your-order-id'
+      }));
+      connection.socket.close();
+      return;
+    }
+
+    const connectionId = `${orderId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     try {
       const order = await orderExecutionService.getOrderStatus(orderId);
@@ -65,78 +92,54 @@ export async function orderRoutes(
         connection.socket.close();
         return;
       }
-      
-      console.log(`WebSocket connected for order ${orderId}`);
-      
-      orderExecutionService.subscribeToOrderStatus(orderId, (update) => {
-        try {
-          connection.socket.send(JSON.stringify(update));
-        } catch (error: any) {
-          console.error(`Error sending WebSocket update for order ${orderId}:`, error);
-        }
-      });
-      
-      connection.socket.on('close', () => {
-        console.log(`WebSocket disconnected for order ${orderId}`);
-        orderExecutionService.unsubscribeFromOrderStatus(orderId);
-      });
-      
-      connection.socket.on('error', (error: any) => {
-        console.error(`WebSocket error for order ${orderId}:`, error);
-        orderExecutionService.unsubscribeFromOrderStatus(orderId);
-      });
+
+      wsManager.addConnection(connectionId, connection.socket, orderId);
       
       connection.socket.send(JSON.stringify({
+        type: 'connection_established',
         orderId,
         status: 'connected',
         message: 'WebSocket connected successfully',
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         currentOrderStatus: order.status
       }));
       
     } catch (error) {
       console.error(`Error setting up WebSocket for order ${orderId}:`, error);
       connection.socket.send(JSON.stringify({
+        type: 'error',
         success: false,
         error: 'Internal server error',
         orderId
       }));
       connection.socket.close();
+      return;
     }
+    
+    connection.socket.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        if (message.type === 'ping') {
+          connection.socket.send(JSON.stringify({
+            type: 'pong',
+            timestamp: new Date().toISOString()
+          }));
+        }
+      } catch (error) {
+        console.error(`Error parsing WebSocket message for order ${orderId}:`, error);
+      }
+    });
+    
+    connection.socket.on('close', () => {
+      wsManager.removeConnection(connectionId, orderId);
+    });
+    
+    connection.socket.on('error', (error: any) => {
+      console.error(`WebSocket error for order ${orderId} (${connectionId}):`, error);
+      wsManager.removeConnection(connectionId, orderId);
+    });
   });
 
-  fastify.post('/create', async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const body = OrderExecutionSchema.parse(request.body) as OrderExecutionRequest;
-      
-      const order = await orderExecutionService.createOrder(body);
-      
-      await queueService.addOrder(order.id);
-      
-      return {
-        success: true,
-        orderId: order.id,
-        status: order.status,
-        message: 'Order created successfully. Use WebSocket endpoint for live updates.',
-        websocketUrl: `/api/orders/execute`
-      };
-      
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return reply.status(400).send({
-          success: false,
-          error: 'Validation error',
-          details: error.errors
-        });
-      }
-      
-      console.error('Error creating order:', error);
-      return reply.status(500).send({
-        success: false,
-        error: 'Internal server error'
-      });
-    }
-  });
 
   fastify.get('/:orderId', async (request: FastifyRequest<{ Params: { orderId: string } }>, reply: FastifyReply) => {
     try {
@@ -214,5 +217,56 @@ export async function orderRoutes(
       });
     }
   });
-}
 
+  fastify.get('/test-ws', { websocket: true }, (connection, request) => {
+    const connectionId = `test_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    wsManager.addConnection(connectionId, connection.socket);
+    
+    connection.socket.send(JSON.stringify({
+      type: 'connection_established',
+      message: 'Test WebSocket connected successfully!',
+      timestamp: new Date().toISOString(),
+      connectionId
+    }));
+    
+    connection.socket.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        if (message.type === 'ping') {
+          connection.socket.send(JSON.stringify({
+            type: 'pong',
+            timestamp: new Date().toISOString()
+          }));
+        }
+      } catch (error) {
+        console.error(`Test WebSocket message error (${connectionId}):`, error);
+      }
+    });
+    
+    connection.socket.on('close', () => {
+      wsManager.removeConnection(connectionId);
+    });
+    
+    connection.socket.on('error', (error) => {
+      console.error(`Test WebSocket error (${connectionId}):`, error);
+      wsManager.removeConnection(connectionId);
+    });
+  });
+
+  fastify.get('/ws-stats', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const stats = wsManager.getStats();
+      return {
+        success: true,
+        stats
+      };
+    } catch (error) {
+      console.error('Error fetching WebSocket stats:', error);
+      return reply.status(500).send({
+        success: false,
+        error: 'Internal server error'
+      });
+    }
+  });
+}

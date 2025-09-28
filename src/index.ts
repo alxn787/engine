@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import { DatabaseService } from './config/database.js';
 import { OrderExecutionService } from './services/order-execution-service.js';
 import { QueueService } from './services/queue-service.js';
+import { WebSocketManager } from './services/websocket-manager.js';
 import { orderRoutes } from './routes/orders.js';
 import { DatabaseConfig, RedisConfig, QueueConfig } from './types/index.js';
 
@@ -36,7 +37,8 @@ async function startServer() {
     const db = new DatabaseService(dbConfig, redisConfig);
     
     console.log('Initializing services...');
-    const orderExecutionService = new OrderExecutionService(db);
+    const wsManager = new WebSocketManager();
+    const orderExecutionService = new OrderExecutionService(db, wsManager);
     const queueService = new QueueService(db['redis'], orderExecutionService, queueConfig);
     
     const fastify = Fastify({
@@ -54,15 +56,18 @@ async function startServer() {
     await fastify.register(orderRoutes, { 
       prefix: '/api/orders',
       orderExecutionService,
-      queueService
+      queueService,
+      wsManager
     });
 
     fastify.get('/health', async (request, reply) => {
       const queueStats = await queueService.getQueueStats();
+      const wsStats = wsManager.getStats();
       return {
         status: 'healthy',
         timestamp: new Date().toISOString(),
         queue: queueStats,
+        websocket: wsStats,
         uptime: process.uptime()
       };
     });

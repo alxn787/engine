@@ -72,34 +72,42 @@ export class QueueService {
     const { orderId } = job.data;
     
     try {
-      console.log(`Processing order ${orderId} (attempt ${job.attemptsMade + 1})`);
-      
       const order = await this.orderExecutionService.getOrderStatus(orderId);
       if (!order) {
         throw new Error(`Order ${orderId} not found`);
       }
 
       if (order.status === 'failed' || order.status === 'confirmed') {
-        console.log(`Order ${orderId} already processed (status: ${order.status})`);
         return;
       }
+
+      console.log(`[${orderId}] PENDING`);
+      await this.orderExecutionService.updateOrderStatus(orderId, 'pending', 'Order received and queued');
 
       if (job.attemptsMade > 0) {
         await this.orderExecutionService.updateOrderStatus(orderId, 'pending', `Retrying order (attempt ${job.attemptsMade + 1}/3)`);
       }
 
+      console.log(`[${orderId}] ROUTING`);
+      await this.orderExecutionService.updateOrderStatus(orderId, 'routing', 'Comparing DEX prices');
+
+      console.log(`[${orderId}] BUILDING`);
+      await this.orderExecutionService.updateOrderStatus(orderId, 'building', 'Creating transaction');
+
       await this.orderExecutionService.executeOrder(orderId);
       
     } catch (error) {
-      console.error(`Error processing order ${orderId}:`, error);
+      console.error(`[${orderId}] FAILED`);
       
       if (job.attemptsMade >= (job.opts.attempts || 3) - 1) {
         console.log(`Order ${orderId} failed after ${job.attemptsMade + 1} attempts`);
         await this.orderExecutionService.updateOrderStatus(orderId, 'failed', `Order failed after ${job.attemptsMade + 1} attempts: ${error instanceof Error ? error.message : String(error)}`, {
           failure_reason: error
         });
-        const db = (this.orderExecutionService as any).db;
-        await db.removeActiveOrder(orderId);
+
+        if ((this.orderExecutionService as any).db && (this.orderExecutionService as any).db.removeActiveOrder) {
+          await (this.orderExecutionService as any).db.removeActiveOrder(orderId);
+        }
       }
       
       throw error;

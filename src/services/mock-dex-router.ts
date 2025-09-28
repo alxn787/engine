@@ -1,5 +1,5 @@
 import { DexQuote, ExecutionResult, Order } from '../types/index.js';
-import { IDexRouter } from '../interfaces/dex-router.interface.js';
+import { IDexRouter } from '../types/dex-router.interface.js';
 
 export class MockDexRouter implements IDexRouter {
   private basePrices: Map<string, number> = new Map();
@@ -31,11 +31,16 @@ export class MockDexRouter implements IDexRouter {
   }
 
   private generateMockTxHash(): string {
-    return '0x' + Math.random().toString(16).substr(2, 64);
+    const timestamp = Date.now().toString(16);
+    const random = Math.random().toString(16).substr(2, 32);
+    const dex = Math.random() > 0.5 ? 'raydium' : 'meteora';
+    const dexPrefix = dex === 'raydium' ? 'ray' : 'met';
+    
+    return `0x${dexPrefix}${timestamp}${random}`.toLowerCase();
   }
 
   async getRaydiumQuote(tokenIn: string, tokenOut: string, amount: number): Promise<DexQuote> {
-    await this.sleep(2000 + Math.random() * 100);
+    await this.sleep(100 + Math.random() * 50);
     
     const basePrice = this.getBasePrice(tokenIn, tokenOut);
     const priceVariation = 0.98 + Math.random() * 0.04;
@@ -51,7 +56,7 @@ export class MockDexRouter implements IDexRouter {
   }
 
   async getMeteoraQuote(tokenIn: string, tokenOut: string, amount: number): Promise<DexQuote> {
-    await this.sleep(2000 + Math.random() * 100);
+    await this.sleep(100 + Math.random() * 50);
     
     const basePrice = this.getBasePrice(tokenIn, tokenOut);
     const priceVariation = 0.97 + Math.random() * 0.05;
@@ -67,8 +72,6 @@ export class MockDexRouter implements IDexRouter {
   }
 
   async getBestQuote(tokenIn: string, tokenOut: string, amount: number): Promise<DexQuote> {
-    console.log(`Fetching quotes for ${amount} ${tokenIn} → ${tokenOut}`);
-    
     const [raydiumQuote, meteoraQuote] = await Promise.all([
       this.getRaydiumQuote(tokenIn, tokenOut, amount),
       this.getMeteoraQuote(tokenIn, tokenOut, amount),
@@ -79,17 +82,11 @@ export class MockDexRouter implements IDexRouter {
 
     const bestQuote = raydiumEffectivePrice > meteoraEffectivePrice ? raydiumQuote : meteoraQuote;
     
-    console.log(`Raydium: ${raydiumQuote.price.toFixed(6)} (fee: ${raydiumQuote.fee})`);
-    console.log(`Meteora: ${meteoraQuote.price.toFixed(6)} (fee: ${meteoraQuote.fee})`);
-    console.log(`Selected: ${bestQuote.dex} with effective price: ${bestQuote.price.toFixed(6)}`);
-    
     return bestQuote;
   }
 
   async executeSwap(quote: DexQuote, order: Order): Promise<ExecutionResult> {
-    console.log(`Executing swap on ${quote.dex} for order ${order.id}`);
-    
-    const executionTime = 2000 + Math.random() * 1000;
+    const executionTime = 50 + Math.random() * 25;
     await this.sleep(executionTime);
     
     let shouldFail = false;
@@ -104,11 +101,10 @@ export class MockDexRouter implements IDexRouter {
     } else if (order.amountIn > 1000) {
       shouldFail = true;
       failureReason = 'Amount too large (exceeds limit)';
-    } else if (Math.random() < 0.15) {
+    } else if (Math.random() < 0.05) {
       shouldFail = true;
       const errorMessages = [
         'Insufficient liquidity',
-        'Slippage too high',
         'Network congestion',
         'Transaction timeout',
         'DEX temporarily unavailable'
@@ -117,7 +113,6 @@ export class MockDexRouter implements IDexRouter {
     }
     
     if (shouldFail) {
-      console.log(`Swap execution failed: ${failureReason}`);
       return {
         success: false,
         error: failureReason,
@@ -125,21 +120,53 @@ export class MockDexRouter implements IDexRouter {
         executedPrice: 0
       };
     }
+
+    const baseSlippage = Math.random() * 0.002; 
+    const sizeImpact = Math.min(order.amountIn / 20000, 0.005); 
+    const marketVolatility = Math.random() * 0.001; 
     
-    const slippage = Math.random() * 0.005;
-    const executedPrice = quote.price * (1 - slippage);
+    const actualSlippage = baseSlippage + sizeImpact + marketVolatility;
+    const maxAllowedSlippage = order.slippageTolerance || 0.01;
+    
+    if (actualSlippage > 0.05) {
+      return {
+        success: false,
+        error: `Slippage extremely high: ${(actualSlippage * 100).toFixed(3)}% exceeds maximum of 5%`,
+        txHash: undefined as any,
+        executedPrice: 0
+      };
+    }
+    
+    const executedPrice = quote.price * (1 - actualSlippage);
+    
+    const txHash = this.generateMockTxHash();
     
     return {
       success: true,
-      txHash: this.generateMockTxHash(),
+      txHash,
       executedPrice,
-      slippage,
+      slippage: actualSlippage,
     };
   }
 
   updateBasePrice(tokenIn: string, tokenOut: string, newPrice: number) {
     const pair = `${tokenIn}-${tokenOut}`;
     this.basePrices.set(pair, newPrice);
-    console.log(`Updated base price for ${pair}: ${newPrice}`);
+  }
+
+  getExecutionDetails(quote: DexQuote, order: Order, result: ExecutionResult) {
+    return {
+      dex: quote.dex,
+      quotePrice: quote.price,
+      fee: quote.fee,
+      liquidity: quote.liquidity,
+      estimatedSlippage: quote.estimatedSlippage,
+      actualSlippage: result.slippage,
+      slippageTolerance: order.slippageTolerance || 0.01,
+      executedPrice: result.executedPrice,
+      txHash: result.txHash,
+      success: result.success,
+      error: result.error
+    };
   }
 }

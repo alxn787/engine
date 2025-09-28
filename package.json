@@ -10,7 +10,14 @@
     "build": "bun build src/index.ts --outdir dist --target bun",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "test:coverage": "bun test --coverage"
+    "test:coverage": "bun test --coverage",
+    "test:integration": "bun test test/integration.test.ts",
+    "test:api": "bun test test/api.test.ts",
+    "test:websocket": "bun test test/websocket.test.ts",
+    "test:websocket-integration": "bun test test/websocket-integration.test.ts",
+    "test:load": "bun test test/load.test.ts",
+    "test:all": "bun run test/run-tests.ts",
+    "test:ws-manual": "node test-websocket-manual.js"
   },
   "keywords": ["order-execution", "dex", "websocket", "trading"],
   "author": "Order Execution Engine",
@@ -28,6 +35,7 @@
   "devDependencies": {
     "@types/pg": "^8.10.7",
     "@types/uuid": "^9.0.6",
+    "@types/ws": "^8.18.1",
     "bun-types": "latest"
   }
 }

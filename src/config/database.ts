@@ -21,6 +21,7 @@ export class DatabaseService {
     this.redis = new Redis({
       host: redisConfig.host,
       port: redisConfig.port,
+      maxRetriesPerRequest: null,
     });
 
     this.initializeTables();
@@ -116,7 +117,27 @@ export class DatabaseService {
   async getOrder(orderId: string) {
     const query = 'SELECT * FROM orders WHERE id = $1';
     const result = await this.pool.query(query, [orderId]);
-    return result.rows[0];
+    const row = result.rows[0];
+    if (!row) return null;
+    
+    return {
+      id: row.id,
+      type: row.type,
+      tokenIn: row.token_in,
+      tokenOut: row.token_out,
+      amountIn: parseFloat(row.amount_in),
+      ...(row.amount_out && { amountOut: parseFloat(row.amount_out) }),
+      ...(row.slippage_tolerance && { slippageTolerance: parseFloat(row.slippage_tolerance) }),
+      userId: row.user_id,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      ...(row.executed_at && { executedAt: row.executed_at }),
+      ...(row.tx_hash && { txHash: row.tx_hash }),
+      ...(row.executed_price && { executedPrice: parseFloat(row.executed_price) }),
+      ...(row.failure_reason && { failureReason: row.failure_reason }),
+      retryCount: row.retry_count
+    };
   }
 
   async getOrdersByUser(userId: string, limit = 50) {
@@ -127,7 +148,24 @@ export class DatabaseService {
       LIMIT $2
     `;
     const result = await this.pool.query(query, [userId, limit]);
-    return result.rows;
+    return result.rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      tokenIn: row.token_in,
+      tokenOut: row.token_out,
+      amountIn: parseFloat(row.amount_in),
+      ...(row.amount_out && { amountOut: parseFloat(row.amount_out) }),
+      ...(row.slippage_tolerance && { slippageTolerance: parseFloat(row.slippage_tolerance) }),
+      userId: row.user_id,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      ...(row.executed_at && { executedAt: row.executed_at }),
+      ...(row.tx_hash && { txHash: row.tx_hash }),
+      ...(row.executed_price && { executedPrice: parseFloat(row.executed_price) }),
+      ...(row.failure_reason && { failureReason: row.failure_reason }),
+      retryCount: row.retry_count
+    }));
   }
 
   async getActiveOrders() {
@@ -137,7 +175,24 @@ export class DatabaseService {
       ORDER BY created_at ASC
     `;
     const result = await this.pool.query(query);
-    return result.rows;
+    return result.rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      tokenIn: row.token_in,
+      tokenOut: row.token_out,
+      amountIn: parseFloat(row.amount_in),
+      ...(row.amount_out && { amountOut: parseFloat(row.amount_out) }),
+      ...(row.slippage_tolerance && { slippageTolerance: parseFloat(row.slippage_tolerance) }),
+      userId: row.user_id,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      ...(row.executed_at && { executedAt: row.executed_at }),
+      ...(row.tx_hash && { txHash: row.tx_hash }),
+      ...(row.executed_price && { executedPrice: parseFloat(row.executed_price) }),
+      ...(row.failure_reason && { failureReason: row.failure_reason }),
+      retryCount: row.retry_count
+    }));
   }
 
   async setActiveOrder(orderId: string, order: any) {
@@ -161,6 +216,17 @@ export class DatabaseService {
     return orders
       .filter(order => order !== null)
       .map(order => JSON.parse(order!));
+  }
+
+  async clearTestData() {
+    // Clear all test data
+    await this.pool.query('DELETE FROM orders');
+    await this.redis.flushdb();
+  }
+
+  async initialize() {
+    // Ensure tables are created
+    await this.initializeTables();
   }
 
   async close() {

@@ -1,4 +1,4 @@
-import { DexQuote, ExecutionResult, Order } from '../types/index.js';
+import { DexQuote, ExecutionResult, Order } from './index.js';
 
 export interface IDexRouter {
   getRaydiumQuote(tokenIn: string, tokenOut: string, amount: number): Promise<DexQuote>;

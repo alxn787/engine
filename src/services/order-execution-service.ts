@@ -2,15 +2,18 @@ import { v4 as uuidv4 } from 'uuid';
 import { Order, OrderExecutionRequest, OrderStatus, OrderStatusUpdate } from '../types/index.js';
 import { MockDexRouter } from './mock-dex-router.js';
 import { DatabaseService } from '../config/database.js';
+import { WebSocketManager } from './websocket-manager.js';
 
 export class OrderExecutionService {
   private dexRouter: MockDexRouter;
   private db: DatabaseService;
+  private wsManager: WebSocketManager;
   private statusSubscribers: Map<string, (update: OrderStatusUpdate) => void> = new Map();
 
-  constructor(db: DatabaseService) {
+  constructor(db: DatabaseService, wsManager: WebSocketManager) {
     this.dexRouter = new MockDexRouter();
     this.db = db;
+    this.wsManager = wsManager;
   }
 
   async createOrder(request: OrderExecutionRequest): Promise<Order> {
@@ -57,10 +60,23 @@ export class OrderExecutionService {
 
       const result = await this.dexRouter.executeSwap(quote, order);
 
+      const executionDetails = this.dexRouter.getExecutionDetails(quote, order, result);
+      console.log(`[${orderId}] Execution Details:`, {
+        dex: executionDetails.dex,
+        quotePrice: executionDetails.quotePrice,
+        executedPrice: executionDetails.executedPrice,
+        slippage: `${((executionDetails.actualSlippage || 0) * 100).toFixed(3)}%`,
+        tolerance: `${(executionDetails.slippageTolerance * 100).toFixed(3)}%`,
+        txHash: executionDetails.txHash
+      });
+
       if (result.success) {
+        console.log(`[${orderId}] SUBMITTED`);
         await this.updateOrderStatus(orderId, 'submitted', 'Transaction sent to network');
         
         await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+        
+        console.log(`[${orderId}] CONFIRMED`);
         
         await this.updateOrderStatus(orderId, 'confirmed', 'Transaction successful', {
           tx_hash: result.txHash,
@@ -75,6 +91,8 @@ export class OrderExecutionService {
           executedPrice: result.executedPrice
         });
       } else {
+        console.log(`[${orderId}] FAILED`);
+        
         await this.updateOrderStatus(orderId, 'failed', 'Order execution failed', {
           failure_reason: result.error || 'Unknown error'
         });
@@ -88,7 +106,7 @@ export class OrderExecutionService {
         throw new Error(result.error || 'Order execution failed');
       }
     } catch (error) {
-      console.error(`Error executing order ${orderId}:`, error);
+      console.error(`[${orderId}] FAILED`);
       
       await this.updateOrderStatus(orderId, 'failed', 'Order execution failed', {
         failure_reason: error instanceof Error ? error.message : 'Unknown error'
@@ -127,6 +145,13 @@ export class OrderExecutionService {
       timestamp: new Date(),
       ...data
     };
+
+
+    if (this.wsManager) {
+      this.wsManager.sendToOrder(orderId, update);
+    } else {
+      console.error('[OrderExecutionService] WebSocket manager not available!');
+    }
 
     const subscriber = this.statusSubscribers.get(orderId);
     if (subscriber) {
