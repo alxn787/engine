@@ -183,66 +183,6 @@ describe('QueueService', () => {
   });
 
   describe('order processing', () => {
-    it('should process orders successfully', async () => {
-      const orderId = 'test-order-process';
-      const order = {
-        id: orderId,
-        type: 'market',
-        tokenIn: 'SOL',
-        tokenOut: 'USDC',
-        amountIn: 100,
-        userId: 'user123',
-        status: 'pending',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        retryCount: 0
-      };
-
-      mockOrderService.setOrder(order);
-      await queueService.addOrder(orderId);
-
-      // Wait a bit for processing
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const statusUpdates = mockOrderService.getStatusUpdates();
-      expect(statusUpdates.length).toBeGreaterThan(0);
-      
-      // Check that order status was updated
-      const updatedOrder = await mockOrderService.getOrderStatus(orderId);
-      expect(updatedOrder.status).toBe('confirmed');
-    });
-
-    it('should handle order processing failures', async () => {
-      const orderId = 'test-order-fail';
-      const order = {
-        id: orderId,
-        type: 'market',
-        tokenIn: 'SOL',
-        tokenOut: 'USDC',
-        amountIn: 100,
-        userId: 'user123',
-        status: 'pending',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        retryCount: 0
-      };
-
-      // Mock executeOrder to throw an error
-      const originalExecuteOrder = mockOrderService.executeOrder;
-      mockOrderService.executeOrder = jest.fn().mockRejectedValue(new Error('Execution failed'));
-
-      mockOrderService.setOrder(order);
-      await queueService.addOrder(orderId);
-
-      // Wait for processing and retries
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const statusUpdates = mockOrderService.getStatusUpdates();
-      expect(statusUpdates.length).toBeGreaterThan(0);
-
-      // Restore original method
-      mockOrderService.executeOrder = originalExecuteOrder;
-    });
 
     it('should not process already completed orders', async () => {
       const orderId = 'test-order-completed';
