@@ -1,6 +1,6 @@
 # Order Execution Engine - Test Suite
 
-This directory contains a comprehensive test suite for the Order Execution Engine, including unit tests, integration tests, load tests, and API documentation.
+
 
 ## Test Structure
 
